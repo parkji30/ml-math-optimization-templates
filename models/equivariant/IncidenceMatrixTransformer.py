@@ -3,46 +3,6 @@ import equinox as eqx
 import jax.numpy as jnp
 from typing import Callable, Sequence, Union, cast
 from jaxtyping import Array
-import math
-
-
-def dot_product_attention_weights(
-    query,
-    key,
-    mask,
-):
-    if mask is not None:
-        query = jnp.where(mask, query, 0)
-        query = cast(Array, query)
-
-        key = jnp.where(mask, key, 0)
-        key = cast(Array, key)
-
-    query = query / math.sqrt(query.shape[1])
-    logits = jnp.einsum("bnec,bnfc->bnef", query, key)
-
-    if mask is not None:
-        mask = jnp.where(logits != 0, 1, 0)
-
-        if mask.shape != logits.shape:
-            raise ValueError(
-                f"mask must have shape (query_seq_length, "
-                f"kv_seq_length)=({query.shape[0]}, "
-                f"{key.shape[0]}). Got {mask.shape}."
-            )
-        logits = jnp.where(mask, logits, jnp.finfo(logits.dtype).min)
-        logits = cast(Array, logits)
-
-    with jax.numpy_dtype_promotion("standard"):
-        dtype = jnp.result_type(logits.dtype, jnp.float32)
-    weights = jax.nn.softmax(logits.astype(dtype)).astype(logits.dtype)
-    return weights
-
-
-def dot_product_attention(query, key, value, mask):
-    weights = dot_product_attention_weights(query, key, mask)
-    attn = jnp.einsum("bcnn,bcne->bcne", weights, value)
-    return attn
 
 
 class CLSToken(eqx.Module):
@@ -76,75 +36,86 @@ class CLSToken(eqx.Module):
 
 
 class IncidenceAttentionHead(eqx.Module):
-    linear1: eqx.nn.Linear | Callable
-    linear2: eqx.nn.Linear | Callable
-    linear3: eqx.nn.Linear | Callable
-    linear_out: eqx.nn.Linear | Callable
+	linear1: eqx.nn.Linear | Callable
+	linear2: eqx.nn.Linear | Callable
+	linear3: eqx.nn.Linear | Callable
+	linear_out: eqx.nn.Linear | Callable
 
-    def __init__(
-        self,
-        embed_dim: int,
-        attention_hidden_dim: int,
-        key: jax.random.PRNGKey,
-        dtype: jnp.dtype = jnp.float32,
-    ):
-        self.linear1 = eqx.nn.Linear(
-            embed_dim, attention_hidden_dim, key=key, dtype=dtype
-        )
-        self.linear2 = eqx.nn.Linear(
-            embed_dim, attention_hidden_dim, key=key, dtype=dtype
-        )
-        self.linear3 = eqx.nn.Linear(
-            embed_dim, attention_hidden_dim, key=key, dtype=dtype
-        )
-        self.linear_out = eqx.nn.Linear(
-            attention_hidden_dim, embed_dim, key=key, dtype=dtype
-        )
+	def __init__(
+		self, embed_dim: int, attention_hidden_dim: int, key: jax.random.PRNGKey, dtype: jnp.dtype = jnp.float32
+	):
+		self.linear1 = eqx.nn.Linear(embed_dim, attention_hidden_dim, key=key, dtype=dtype)
+		self.linear2 = eqx.nn.Linear(embed_dim, attention_hidden_dim, key=key, dtype=dtype)
+		self.linear3 = eqx.nn.Linear(embed_dim, attention_hidden_dim, key=key, dtype=dtype)
+		self.linear_out = eqx.nn.Linear(attention_hidden_dim, embed_dim, key=key, dtype=dtype)
 
-    def __call__(
-        self, x: jax.Array, mask: jax.Array, attention_along_channel: bool = False
-    ) -> jax.Array:
-        # Assuming x is of shape (B, N, E, C)
-        query = jax.vmap(jax.vmap(jax.vmap(self.linear1)))(x)
-        key = jax.vmap(jax.vmap(jax.vmap(self.linear2)))(x)
-        value = jax.vmap(jax.vmap(jax.vmap(self.linear3)))(x)
+	def __call__(self, x: jax.Array, mask: jax.Array, attention_along_channel: bool = False) -> jax.Array:
+		# Assuming x is of shape (B, N, E, C)
+		_, _, _, C = x.shape
 
-        # Swaps N, E dimension
-        if attention_along_channel:
-            query = query.transpose(0, 3, 1, 2)
-            key = key.transpose(0, 3, 1, 2)
-            value = value.transpose(0, 3, 1, 2)
-            if mask is not None:
-                mask = mask.transpose(0, 3, 1, 2)
-        else:
-            # (B, E, N, C)
-            query = query.transpose(0, 2, 1, 3)
-            key = key.transpose(0, 2, 1, 3)
-            value = value.transpose(0, 2, 1, 3)
-            if mask is not None:
-                mask = mask.transpose(0, 2, 1, 3)
+		# This will ensure that linear layers don't pick up on the x.
+		# the bias term will not affect this.
+		if mask is not None:
+			x *= ~mask  # This is correct
 
-        attention_output = dot_product_attention(query, key, value, mask=mask)
+		query = jax.vmap(jax.vmap(jax.vmap(self.linear1)))(x)
+		key = jax.vmap(jax.vmap(jax.vmap(self.linear2)))(x)
+		value = jax.vmap(jax.vmap(jax.vmap(self.linear3)))(x)
 
-        if mask is not None:
-            attention_output = jnp.where(mask, attention_output, 0)
-            attention_output = cast(Array, attention_output)
+		# Swaps N, E dimension
+		if attention_along_channel:
+			query = query.transpose(0, 3, 1, 2)
+			key = key.transpose(0, 3, 1, 2)
+			value = value.transpose(0, 3, 1, 2)
+			if mask is not None:
+				mask = mask.transpose(0, 3, 1, 2)
+				# this will ensure the mask values turn 0
+				# and the others stay as
+				# query *= ~mask
+				# key *= ~mask
+				# value *= ~mask
+		else:
+			# (B, E, N, C)
+			query = query.transpose(0, 2, 1, 3)
+			key = key.transpose(0, 2, 1, 3)
+			value = value.transpose(0, 2, 1, 3)
+			if mask is not None:
+				mask = mask.transpose(0, 2, 1, 3)
+				# this will ensure the mask values turn 0
+				# and the others stay as
+				# query *= ~mask
+				# key *= ~mask
+				# value *= ~mask
 
-        # Transpose back to (B, N, E, C)
-        if attention_along_channel:
-            attention_output = attention_output.transpose(0, 2, 3, 1)
-        else:
-            # (B, E, N, C)
-            attention_output = attention_output.transpose(0, 2, 1, 3)
+		# This is the issue with masking
+		# We divided by N before but that's batch relative
+		query_key = query @ key.transpose(0, 1, 3, 2) / jnp.sqrt(C)
 
-        # Shrink data to original dimension
-        # If this is turned off, then the projecte embeddings will continue
-        attention_output = jax.vmap(jax.vmap(jax.vmap(self.linear_out)))(
-            attention_output
-        )
+		if mask is not None:
+			query_key = jnp.where(query_key == 0, -9999, query_key)
 
-        # this should be the same dimensions as the input
-        return attention_output
+		# This step is fine
+		# (B, E, N, N)
+		attention_filter = jax.nn.softmax(query_key, axis=-1)
+
+		# Attention Output
+		attention_output = attention_filter @ value
+		if mask is not None:
+			attention_output *= ~mask
+
+		# Transpose back to (B, N, E, C)
+		if attention_along_channel:
+			attention_output = attention_output.transpose(0, 2, 3, 1)
+		else:
+			# (B, E, N, C)
+			attention_output = attention_output.transpose(0, 2, 1, 3)
+
+		# Shrink data to original dimension
+		# If this is turned off, then the projecte embeddings will continue
+		attention_output = jax.vmap(jax.vmap(jax.vmap(self.linear_out)))(attention_output)
+
+		# this should be the same dimensions as the input
+		return attention_output
 
 
 class MLP(eqx.Module):
