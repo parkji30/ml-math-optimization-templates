@@ -1,1 +1,7 @@
-Various interesting models handmade for specific problems. Hopefully the architecture can provide some use for others looking into it.
+Skeleton files on how to create various model architectures along with different mathematical techniques.
+
+So far I have made
+
+- models
+- optimiation workflows
+  
