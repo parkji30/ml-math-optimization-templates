@@ -171,9 +171,9 @@ class MLP(eqx.Module):
         self.activation = jax.nn.gelu
 
     def __call__(self, x: jax.Array) -> jax.Array:
-        x = jax.vmap(jax.vmap(jax.vmap(self.linear1)))(x)
+        x = jax.vmap(jax.vmap(self.linear1))(x)
         x = self.activation(x)
-        x = jax.vmap(jax.vmap(jax.vmap(self.linear2)))(x)
+        x = jax.vmap(jax.vmap(self.linear2))(x)
         return x
 
 
@@ -211,77 +211,6 @@ class TransformerAttentionBlock1D(eqx.Module):
         x = x + mlp_output
 
         return x
-
-
-class ConstantChannelTransformerCLS(eqx.Module):
-    blowup_layer: Sequence[Union[eqx.nn.Linear, Callable]]
-    encoder_blocks: Sequence[TransformerAttentionBlock1D]
-    ff_layer: Sequence[Union[eqx.nn.Linear, Callable]]
-    node_cls_token: CLSToken
-    edge_cls_token: CLSToken
-    # blowdown_layer: Sequence[Union[eqx.nn.Linear, Callable]]
-    node_attention_block: TransformerAttentionBlock1D
-    edge_attention_block: TransformerAttentionBlock1D
-    num_layers: int
-
-    def __init__(
-        self,
-        attention_hidden_dim: int,
-        mlp_hidden_dim: int,
-        num_layers: int,
-        *,
-        dtype: jnp.dtype = jnp.float32,
-        key: jax.random.PRNGKey,
-    ):
-        self.num_layers = num_layers
-        self.blowup_layer = [
-            eqx.nn.Linear(3, attention_hidden_dim, key=key, dtype=dtype),
-            jax.nn.gelu,
-        ]
-
-        self.encoder_blocks = [
-            TransformerAttentionBlock1D(
-                attention_hidden_dim,
-                attention_hidden_dim,
-                attention_hidden_dim,
-                key=key,
-                dtype=dtype,
-            )
-            for _ in range(num_layers)
-        ]
-
-        self.node_cls_token = CLSToken((1, 1, 1, attention_hidden_dim))
-        self.edge_cls_token = CLSToken((1, 1, 1, attention_hidden_dim))
-
-        self.node_attention_block = TransformerAttentionBlock1D(
-            embed_dim=attention_hidden_dim,
-            attention_hidden_dim=attention_hidden_dim,
-            mlp_hidden_dim=attention_hidden_dim,
-            key=key,
-            dtype=dtype,
-        )
-
-        self.edge_attention_block = TransformerAttentionBlock1D(
-            embed_dim=attention_hidden_dim,
-            attention_hidden_dim=attention_hidden_dim,
-            mlp_hidden_dim=attention_hidden_dim,
-            key=key,
-            dtype=dtype,
-        )
-
-        self.ff_layer = [
-            eqx.nn.Linear(
-                2 * attention_hidden_dim, mlp_hidden_dim, key=key, dtype=dtype
-            ),
-            jax.nn.gelu,
-            eqx.nn.Linear(mlp_hidden_dim, mlp_hidden_dim, key=key, dtype=dtype),
-            jax.nn.gelu,
-            eqx.nn.Linear(mlp_hidden_dim, mlp_hidden_dim, key=key, dtype=dtype),
-            jax.nn.gelu,
-            eqx.nn.Linear(mlp_hidden_dim, mlp_hidden_dim, key=key, dtype=dtype),
-            jax.nn.gelu,
-            eqx.nn.Linear(mlp_hidden_dim, 1, key=key, dtype=dtype),
-        ]
 
 
 class IncidenceMatrixTransformer(eqx.Module):
@@ -357,7 +286,7 @@ class IncidenceMatrixTransformer(eqx.Module):
             if mask is not None:
                 x = jnp.where(mask, x, 0)
                 x = cast(Array, x)
-            x = eqx.filter_vmap(eqx.filter_vmap(eqx.filter_vmap(block)))(x)
+            x = eqx.filter_vmap(eqx.filter_vmap(block))(x)
 
         # keep the channels constant
         for block in self.encoder_blocks:
@@ -370,7 +299,7 @@ class IncidenceMatrixTransformer(eqx.Module):
         # Forward
         for block in self.node_pool_ff_layer:
             block = eqx.filter_checkpoint(block)
-            x = eqx.filter_vmap(eqx.filter_vmap(eqx.filter_vmap(block)))(x)
+            x = eqx.filter_vmap(eqx.filter_vmap(block))(x)
 
         x = jnp.max(x, where=mask, axis=1, initial=0)
         if mask is not None:
@@ -378,12 +307,12 @@ class IncidenceMatrixTransformer(eqx.Module):
 
         # Edge Pool
         for block in self.edge_pool_ff_layer:
-            x = eqx.filter_vmap(eqx.filter_vmap(eqx.filter_checkpoint((block))))(x)
+            x = eqx.filter_vmap(eqx.filter_checkpoint((block)))(x)
 
         # FF Threshold
         x = jnp.max(x, where=mask, axis=1, initial=0)
         for block in self.threshold_ff_layer:
-            x = eqx.filter_vmap(eqx.filter_checkpoint(block))(x)
+            x = eqx.filter_checkpoint(block)(x)
 
         return x
 
