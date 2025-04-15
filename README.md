@@ -1,4 +1,1 @@
-A repository containing the architectures of various JAX Equinox models.
-
-Models 
- -  Equivariant
+Various interesting models handmade for specific problems. Hopefully the architecture can provide some use for others looking into it.
