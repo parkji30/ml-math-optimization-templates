@@ -35,16 +35,15 @@ def objective_function_to_optimize():
     """
     pass
 
+
 # You need to set this mapping for your parameter to index.
 # This mapping should correspond to the relative position in objective_function_to_optimize
-PARAM_TO_INDEX = { ... }
-INDEX_TO_PARAM = { ... }
+PARAM_TO_INDEX = {...}
+INDEX_TO_PARAM = {...}
 
 
 @partial(jax.jit, static_argnames=["fit_type"])
-def objective_function(
-    tuned_params, frozen_params, x, y, fit_type, sigmoid_dict
-):
+def objective_function(tuned_params, frozen_params, x, y, fit_type, sigmoid_dict):
     combined_params = tuned_params | frozen_params
 
     combined_params = {
@@ -53,9 +52,7 @@ def objective_function(
     }
 
     # This is the objective function you want to optimize.
-    y_pred = objective_function_to_optimize(
-        ...
-    )
+    y_pred = objective_function_to_optimize(...)
 
     # Loss landscapes
     mse_loss = optax.squared_error(y_pred, y).mean()
@@ -156,13 +153,9 @@ class JaxBackprop:
                     jax_sigmoid_dict[PARAM_TO_INDEX[p]] = self.sigmoid_params[p]
                 else:
                     jax_sigmoid_dict[PARAM_TO_INDEX[p]] = 0
-                jax_tuneable_dict[PARAM_TO_INDEX[p]] = jnp.array(
-                    v, dtype=self.dtype
-                )
+                jax_tuneable_dict[PARAM_TO_INDEX[p]] = jnp.array(v, dtype=self.dtype)
             else:
-                jax_frozen_dict[PARAM_TO_INDEX[p]] = jnp.array(
-                    v, dtype=self.dtype
-                )
+                jax_frozen_dict[PARAM_TO_INDEX[p]] = jnp.array(v, dtype=self.dtype)
                 jax_sigmoid_dict[PARAM_TO_INDEX[p]] = 0
         opt_state = self.optimizer.init(jax_tuneable_dict)
 

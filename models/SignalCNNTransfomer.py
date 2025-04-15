@@ -7,6 +7,7 @@ Model used to train multitask regression (or if you modify it)
 classification problems for 1d signals.
 """
 
+
 class SignalCNNTransformer(nn.Module):
     def __init__(
         self,
@@ -44,7 +45,7 @@ class SignalCNNTransformer(nn.Module):
             self.downsample_block.append(
                 nn.Conv1d(
                     c1, c2, kernel_size=kernel_downsample_size, stride=1, padding=0
-                ) 
+                )
             )
             # c2, length
             if self.layer_norm:
