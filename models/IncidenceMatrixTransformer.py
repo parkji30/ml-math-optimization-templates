@@ -4,6 +4,36 @@ import jax.numpy as jnp
 from typing import Callable, Sequence, Union, cast
 from jaxtyping import Array
 
+"""
+An equivariant model used to train incidence (or adjacency matrix) data.
+"""
+
+def dot_product_attention_weights(
+	query,
+	key,
+	mask,
+):
+	C = query.shape[0]
+	logits = jnp.einsum('bij, bjk -> bik', query, key.transpose(0, 2, 1)) / jnp.sqrt(C)
+
+	# if mask is not None:
+	# # 	# We can't use 0.
+	# # 	# You have to use mask because some values are going to be 0.
+	# 	logits = jnp.where(mask, logits, -999999)
+	# 	logits = cast(Array, logits)
+
+	with jax.numpy_dtype_promotion('standard'):
+		dtype = jnp.result_type(logits.dtype, jnp.float32)
+	weights = jax.nn.softmax(logits, axis=-1).astype(logits)
+	return weights
+
+
+def dot_product_attention(query, key, value, mask):
+	weights = dot_product_attention_weights(query, key, mask)
+
+	attn = jnp.einsum('cij, cjk->cik', weights, value)
+	return attn
+
 
 class CLSToken(eqx.Module):
     cls_token: jax.Array
@@ -51,48 +81,38 @@ class IncidenceAttentionHead(eqx.Module):
 
 	def __call__(self, x: jax.Array, mask: jax.Array, attention_along_channel: bool = False) -> jax.Array:
 		# Assuming x is of shape (B, N, E, C)
-		_, _, _, C = x.shape
+		_, _, C = x.shape
 
 		# This will ensure that linear layers don't pick up on the x.
 		# the bias term will not affect this.
 		if mask is not None:
-			x *= ~mask  # This is correct
+			# x *= mask  # This is correct
+			x = jnp.where(mask, x, 0)
 
-		query = jax.vmap(jax.vmap(jax.vmap(self.linear1)))(x)
-		key = jax.vmap(jax.vmap(jax.vmap(self.linear2)))(x)
-		value = jax.vmap(jax.vmap(jax.vmap(self.linear3)))(x)
+		query = jax.vmap(jax.vmap(self.linear1))(x)
+		key = jax.vmap(jax.vmap(self.linear2))(x)
+		value = jax.vmap(jax.vmap(self.linear3))(x)
 
 		# Swaps N, E dimension
 		if attention_along_channel:
-			query = query.transpose(0, 3, 1, 2)
-			key = key.transpose(0, 3, 1, 2)
-			value = value.transpose(0, 3, 1, 2)
+			query = query.transpose(2, 0, 1)
+			key = key.transpose(2, 0, 1)
+			value = value.transpose(2, 0, 1)
 			if mask is not None:
-				mask = mask.transpose(0, 3, 1, 2)
+				mask = mask.transpose(2, 0, 1)
 				# this will ensure the mask values turn 0
 				# and the others stay as
-				# query *= ~mask
-				# key *= ~mask
-				# value *= ~mask
-		else:
-			# (B, E, N, C)
-			query = query.transpose(0, 2, 1, 3)
-			key = key.transpose(0, 2, 1, 3)
-			value = value.transpose(0, 2, 1, 3)
-			if mask is not None:
-				mask = mask.transpose(0, 2, 1, 3)
-				# this will ensure the mask values turn 0
-				# and the others stay as
-				# query *= ~mask
-				# key *= ~mask
-				# value *= ~mask
+				query = jnp.where(mask, query, 0)
+				key = jnp.where(mask, key, 0)
+				value = jnp.where(mask, value, 0)
 
 		# This is the issue with masking
 		# We divided by N before but that's batch relative
-		query_key = query @ key.transpose(0, 1, 3, 2) / jnp.sqrt(C)
+		query_key = query @ key.transpose(0, 2, 1) / jnp.sqrt(C)
 
+		# THIS STEP IS NOT NECESSARY
 		if mask is not None:
-			query_key = jnp.where(query_key == 0, -9999, query_key)
+			query_key = jnp.where(0, query_key, -999999)
 
 		# This step is fine
 		# (B, E, N, N)
@@ -100,23 +120,22 @@ class IncidenceAttentionHead(eqx.Module):
 
 		# Attention Output
 		attention_output = attention_filter @ value
+
+		# THIS STEP IS NOT NECESSARY
 		if mask is not None:
-			attention_output *= ~mask
+			attention_output = jnp.where(mask, attention_output, 0)
 
 		# Transpose back to (B, N, E, C)
 		if attention_along_channel:
-			attention_output = attention_output.transpose(0, 2, 3, 1)
-		else:
-			# (B, E, N, C)
-			attention_output = attention_output.transpose(0, 2, 1, 3)
+			attention_output = attention_output.transpose(1, 2, 0)
 
 		# Shrink data to original dimension
 		# If this is turned off, then the projecte embeddings will continue
-		attention_output = jax.vmap(jax.vmap(jax.vmap(self.linear_out)))(attention_output)
+		attention_output = jax.vmap(jax.vmap(self.linear_out))(attention_output)
 
 		# this should be the same dimensions as the input
 		return attention_output
-
+     
 
 class MLP(eqx.Module):
     linear1: eqx.nn.Linear
