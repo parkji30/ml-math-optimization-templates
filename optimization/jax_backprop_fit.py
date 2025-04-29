@@ -134,7 +134,7 @@ class JaxBackprop:
         self.tuneable_params = tuneable_params
         self.sigmoid_params = sigmoid_dict
 
-    def solve_smatrix(
+    def solve_obj_function(
         self,
         x,
         y,
